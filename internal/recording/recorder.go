@@ -77,64 +77,50 @@ func StopRecording(decisionTime int64) error {
 	// Give OBS a moment to finish writing files
 	time.Sleep(3 * time.Second)
 
-	// Find Camera*.flv files in captures directory
+	// Find *Camera*.flv files in captures directory
 	files, err := os.ReadDir(captureDir)
 	if err != nil {
 		return fmt.Errorf("failed to read captures directory: %w", err)
 	}
 
-	var cameraFiles []string
+	var sourceFiles []string
 	for _, file := range files {
 		name := file.Name()
 		if strings.HasSuffix(name, ".flv") && strings.Contains(name, "Camera") {
-			// Extract just the "Camera*" portion from the filename
-			parts := strings.Split(name, "Camera")
-			if len(parts) > 1 {
-				cameraNum := strings.TrimSuffix(parts[1], ".flv")
-				simpleFileName := fmt.Sprintf("Camera%s.flv", cameraNum)
-				cameraFiles = append(cameraFiles, filepath.Join(captureDir, simpleFileName))
-			}
+			sourceFiles = append(sourceFiles, filepath.Join(captureDir, name))
 		}
 	}
 
-	if len(cameraFiles) == 0 {
+	if len(sourceFiles) == 0 {
 		return fmt.Errorf("no camera files found in captures directory %s", captureDir)
 	}
 
-	// Calculate trimming parameters
-	startTime := state.LastStartTime
-	trimDuration := state.LastTimerStopTime - startTime - 5000
-	logging.InfoLogger.Printf("Duration to be trimmed: %d milliseconds", trimDuration)
-
-	// First pass: trim each camera file to simple MP4
+	// First pass: trim each camera file to MP4
 	var trimmedFiles []string
-	for _, cameraFile := range cameraFiles {
-		// Use simple Camera*.mp4 name for trimmed file
-		baseFileName := strings.TrimSuffix(filepath.Base(cameraFile), ".flv")
-		trimmedFile := filepath.Join(captureDir, baseFileName+".mp4")
-		trimmedFiles = append(trimmedFiles, trimmedFile)
+	for _, sourceFile := range sourceFiles {
+		if idx := strings.LastIndex(sourceFile, "Camera"); idx != -1 {
+			cameraNum := strings.TrimSuffix(sourceFile[idx+6:], ".flv") // +6 to skip "Camera"
+			trimmedFile := filepath.Join(captureDir, fmt.Sprintf("Camera%s.mp4", cameraNum))
+			trimmedFiles = append(trimmedFiles, trimmedFile)
 
-		cameraNum := strings.TrimPrefix(baseFileName, "Camera")
+			// Process video trimming
+			attemptInfo := fmt.Sprintf("%s - %s attempt %d",
+				strings.ReplaceAll(state.CurrentAthlete, "_", " "),
+				state.CurrentLiftType,
+				state.CurrentAttempt)
 
-		attemptInfo := fmt.Sprintf("%s - %s attempt %d",
-			strings.ReplaceAll(state.CurrentAthlete, "_", " "),
-			state.CurrentLiftType,
-			state.CurrentAttempt)
+			httpServer.SendStatus(httpServer.Trimming, fmt.Sprintf("Trimming video for Camera %s: %s", cameraNum, attemptInfo))
 
-		httpServer.SendStatus(httpServer.Trimming, fmt.Sprintf("Trimming video for Camera %s: %s", cameraNum, attemptInfo))
+			startTime := state.LastStartTime
+			trimDuration := state.LastTimerStopTime - startTime - 5000
 
-		// Trim and convert to MP4
-		args := buildTrimmingArgs(trimDuration, cameraFile, trimmedFile)
-		cmd := createFfmpegCmd(args)
-		logging.InfoLogger.Printf("Executing trim command for Camera %s: %s", cameraNum, cmd.String())
+			args := buildTrimmingArgs(trimDuration, sourceFile, trimmedFile)
+			cmd := createFfmpegCmd(args)
+			logging.InfoLogger.Printf("Executing trim command for Camera %s: %s", cameraNum, cmd.String())
 
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to trim video for Camera %s: %w", cameraNum, err)
-		}
-
-		// Remove the original .flv file
-		if err := os.Remove(cameraFile); err != nil {
-			logging.WarningLogger.Printf("Failed to remove source .flv file for Camera %s: %v", cameraNum, err)
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to trim video for Camera %s: %w", cameraNum, err)
+			}
 		}
 	}
 
@@ -179,6 +165,17 @@ func StopRecording(decisionTime int64) error {
 
 		if _, err := io.Copy(destFile, sourceFile); err != nil {
 			return fmt.Errorf("failed to copy video to final location for Camera %s: %w", cameraNum, err)
+		}
+	}
+
+	// Final pass: remove original .flv files
+
+	// wait 5 seconds
+	time.Sleep(5 * time.Second)
+
+	for _, sourceFile := range sourceFiles {
+		if err := os.Remove(sourceFile); err != nil {
+			logging.WarningLogger.Printf("Failed to remove source .flv file %s: %v", sourceFile, err)
 		}
 	}
 

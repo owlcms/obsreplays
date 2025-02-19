@@ -187,11 +187,6 @@ func main() {
 		logging.ErrorLogger.Fatalf("Error processing flags: %v", err)
 	}
 
-	// Initialize recorder
-	if err := recording.InitializeRecorder(); err != nil {
-		logging.ErrorLogger.Fatalf("Failed to initialize recorder: %v", err)
-	}
-
 	// Set recording package configuration
 	recording.SetNoVideo(config.NoVideo)
 	recording.SetVideoDir(cfg.VideoDir)
@@ -308,15 +303,26 @@ func main() {
 			statusLabel.SetText(fmt.Sprintf("Error: Could not find owlcms server - %v", err))
 			statusLabel.TextStyle = fyne.TextStyle{Bold: true}
 			statusLabel.Refresh()
-		} else {
-			cfg.OwlCMS = broker
-			statusLabel.SetText("Ready")
-			statusLabel.TextStyle = fyne.TextStyle{Bold: false}
-			statusLabel.Refresh()
-
-			// Start MQTT monitor which handles platform list retrieval
-			go monitor.Monitor(cfg)
+			return
 		}
+
+		cfg.OwlCMS = broker
+
+		// Initialize recorder after owlcms is found
+		if err := recording.InitializeRecorder(); err != nil {
+			logging.ErrorLogger.Printf("Failed to connect to OBS: %v", err)
+			statusLabel.SetText(fmt.Sprintf("Error: Could not connect to OBS - check that OBS is running with WebSocket plugin enabled"))
+			statusLabel.TextStyle = fyne.TextStyle{Bold: true}
+			statusLabel.Refresh()
+			return
+		}
+
+		statusLabel.SetText("Ready")
+		statusLabel.TextStyle = fyne.TextStyle{Bold: false}
+		statusLabel.Refresh()
+
+		// Start MQTT monitor which handles platform list retrieval
+		go monitor.Monitor(cfg)
 	}()
 
 	// Initialize signal handling
