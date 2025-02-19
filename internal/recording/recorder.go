@@ -2,6 +2,7 @@ package recording
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -44,21 +45,7 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 
 // StartRecording starts recording videos using OBS
 func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
-	if err := os.MkdirAll(config.GetVideoDir(), os.ModePerm); err != nil {
-		return fmt.Errorf("failed to create video directory: %w", err)
-	}
-
-	fullName = strings.ReplaceAll(fullName, " ", "_")
-
-	var fileNames []string
-
-	fileName := filepath.Join(config.GetVideoDir(), fmt.Sprintf("%s_%s_attempt%d_%d.mp4", fullName, liftTypeKey, attemptNumber, state.LastStartTime))
-	fileNames = append(fileNames, fileName)
-
-	currentFileNames = fileNames
-	state.LastTimerStopTime = 0
-
-	// reset the Replay Source plugin
+	// reset the Replay Source plugin and start recording
 	if err := obsClient.TriggerHotkey("OBS_KEY_F6"); err != nil {
 		return fmt.Errorf("failed to send F6 hotkey to OBS: %w", err)
 	}
@@ -71,32 +58,87 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 		liftTypeKey,
 		attemptNumber))
 
-	logging.InfoLogger.Printf("Started recording videos: %v", fileNames)
+	logging.InfoLogger.Printf("Started recording")
 	return nil
 }
 
 // StopRecording stops the current recordings and trims the videos
 func StopRecording(decisionTime int64) error {
-	if len(currentFileNames) == 0 && !config.NoVideo {
-		return fmt.Errorf("no ongoing recordings to stop")
-	}
+	captureDir := filepath.Join(os.Getenv("USERPROFILE"), "Videos", "Captures")
 
+	// Stop recording and free files
 	if err := obsClient.TriggerHotkey("OBS_KEY_F8"); err != nil {
 		return fmt.Errorf("failed to send F8 hotkey to OBS: %w", err)
 	}
-	// free up the files.
 	if err := obsClient.TriggerHotkey("OBS_KEY_F6"); err != nil {
 		return fmt.Errorf("failed to send F6 hotkey to OBS: %w", err)
 	}
 
+	// Give OBS a moment to finish writing files
+	time.Sleep(3 * time.Second)
+
+	// Find Camera*.flv files in captures directory
+	files, err := os.ReadDir(captureDir)
+	if err != nil {
+		return fmt.Errorf("failed to read captures directory: %w", err)
+	}
+
+	var cameraFiles []string
+	for _, file := range files {
+		name := file.Name()
+		if strings.HasSuffix(name, ".flv") && strings.Contains(name, "Camera") {
+			// Extract just the "Camera*" portion from the filename
+			parts := strings.Split(name, "Camera")
+			if len(parts) > 1 {
+				cameraNum := strings.TrimSuffix(parts[1], ".flv")
+				simpleFileName := fmt.Sprintf("Camera%s.flv", cameraNum)
+				cameraFiles = append(cameraFiles, filepath.Join(captureDir, simpleFileName))
+			}
+		}
+	}
+
+	if len(cameraFiles) == 0 {
+		return fmt.Errorf("no camera files found in captures directory %s", captureDir)
+	}
+
+	// Calculate trimming parameters
 	startTime := state.LastStartTime
 	trimDuration := state.LastTimerStopTime - startTime - 5000
 	logging.InfoLogger.Printf("Duration to be trimmed: %d milliseconds", trimDuration)
 
-	timestamp := time.Now().Format("2006-01-02_15h04m05s")
-	var finalFileNames []string
+	// First pass: trim each camera file to simple MP4
+	var trimmedFiles []string
+	for _, cameraFile := range cameraFiles {
+		// Use simple Camera*.mp4 name for trimmed file
+		baseFileName := strings.TrimSuffix(filepath.Base(cameraFile), ".flv")
+		trimmedFile := filepath.Join(captureDir, baseFileName+".mp4")
+		trimmedFiles = append(trimmedFiles, trimmedFile)
 
-	// Create session directory if it doesn't exist
+		cameraNum := strings.TrimPrefix(baseFileName, "Camera")
+
+		attemptInfo := fmt.Sprintf("%s - %s attempt %d",
+			strings.ReplaceAll(state.CurrentAthlete, "_", " "),
+			state.CurrentLiftType,
+			state.CurrentAttempt)
+
+		httpServer.SendStatus(httpServer.Trimming, fmt.Sprintf("Trimming video for Camera %s: %s", cameraNum, attemptInfo))
+
+		// Trim and convert to MP4
+		args := buildTrimmingArgs(trimDuration, cameraFile, trimmedFile)
+		cmd := createFfmpegCmd(args)
+		logging.InfoLogger.Printf("Executing trim command for Camera %s: %s", cameraNum, cmd.String())
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to trim video for Camera %s: %w", cameraNum, err)
+		}
+
+		// Remove the original .flv file
+		if err := os.Remove(cameraFile); err != nil {
+			logging.WarningLogger.Printf("Failed to remove source .flv file for Camera %s: %v", cameraNum, err)
+		}
+	}
+
+	// Create session directory for final copies
 	sessionDir := state.CurrentSession
 	if sessionDir == "" {
 		sessionDir = "unsorted"
@@ -107,57 +149,41 @@ func StopRecording(decisionTime int64) error {
 		return fmt.Errorf("failed to create session directory: %w", err)
 	}
 
-	for i, currentFileName := range currentFileNames {
-		baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
-		baseFileName = baseFileName[:len(baseFileName)-len(fmt.Sprintf("_%d", state.LastStartTime))]
-		finalFileName := filepath.Join(fullSessionDir, fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
-		finalFileNames = append(finalFileNames, finalFileName)
+	// Second pass: copy trimmed files to final destination
+	timestamp := time.Now().Format("2006-01-02_15h04m05s")
+	baseFileName := fmt.Sprintf("%s_%s_%s_attempt%d",
+		timestamp,
+		strings.ReplaceAll(state.CurrentAthlete, " ", "_"),
+		state.CurrentLiftType,
+		state.CurrentAttempt)
 
-		attemptInfo := fmt.Sprintf("%s - %s attempt %d",
-			strings.ReplaceAll(state.CurrentAthlete, "_", " "),
-			state.CurrentLiftType,
-			state.CurrentAttempt)
+	var finalFiles []string
+	for _, trimmedFile := range trimmedFiles {
+		cameraNum := strings.TrimPrefix(filepath.Base(trimmedFile), "Camera")
+		cameraNum = strings.TrimSuffix(cameraNum, ".mp4")
+		finalFileName := filepath.Join(fullSessionDir, fmt.Sprintf("%s_Camera%s.mp4", baseFileName, cameraNum))
+		finalFiles = append(finalFiles, finalFileName)
 
-		httpServer.SendStatus(httpServer.Trimming, fmt.Sprintf("Trimming video for Camera %d: %s", i+1, attemptInfo))
+		// Copy the MP4 file to final destination (using io.Copy to keep the original)
+		sourceFile, err := os.Open(trimmedFile)
+		if err != nil {
+			return fmt.Errorf("failed to open source file for Camera %s: %w", cameraNum, err)
+		}
+		defer sourceFile.Close()
 
-		var err error
-		if startTime == 0 {
-			logging.InfoLogger.Printf("Start time is 0, not trimming the video for Camera %d", i+1)
-			if config.NoVideo {
-				logging.InfoLogger.Printf("Simulating rename video for Camera %d: %s -> %s", i+1, currentFileName, finalFileName)
-			} else if err = os.Rename(currentFileName, finalFileName); err != nil {
-				return fmt.Errorf("failed to rename video file for Camera %d to %s: %w", i+1, finalFileName, err)
-			}
-		} else {
-			for j := 0; j < 5; j++ {
-				args := buildTrimmingArgs(trimDuration, currentFileName, finalFileName)
-				cmd := createFfmpegCmd(args)
+		destFile, err := os.Create(finalFileName)
+		if err != nil {
+			return fmt.Errorf("failed to create destination file for Camera %s: %w", cameraNum, err)
+		}
+		defer destFile.Close()
 
-				if j == 0 {
-					logging.InfoLogger.Printf("Executing trim command for Camera %d: %s", i+1, cmd.String())
-				}
-
-				if err = cmd.Run(); err != nil {
-					logging.ErrorLogger.Printf("Waiting for input video for Camera %d (attempt %d/5): %v", i+1, j+1, err)
-					time.Sleep(1 * time.Second)
-				} else {
-					break
-				}
-				if j == 4 {
-					return fmt.Errorf("failed to open input video for Camera %d after 5 attempts: %w", i+1, err)
-				}
-			}
-			if err = os.Remove(currentFileName); err != nil {
-				return fmt.Errorf("failed to remove untrimmed video file for Camera %d: %w", i+1, err)
-			}
+		if _, err := io.Copy(destFile, sourceFile); err != nil {
+			return fmt.Errorf("failed to copy video to final location for Camera %s: %w", cameraNum, err)
 		}
 	}
 
-	// Send single "Videos ready" message after all cameras are done
 	httpServer.SendStatus(httpServer.Ready, "Videos ready")
-
-	logging.InfoLogger.Printf("Stopped recording and saved videos: %v", finalFileNames)
-	currentFileNames = nil
+	logging.InfoLogger.Printf("Processed videos: %v", finalFiles)
 
 	return nil
 }
