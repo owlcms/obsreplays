@@ -6,34 +6,21 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/owlcms/obsreplays/internal/logging"
 )
 
-// CameraConfiguration represents platform-specific configurations
-type CameraConfiguration struct {
-	FfmpegPath   string `toml:"ffmpegPath"`
-	FfmpegCamera string `toml:"ffmpegCamera"`
-	Format       string `toml:"format"`
-	Params       string `toml:"params"`
-	Size         string `toml:"size"`
-	Fps          int    `toml:"fps"`
-	Recode       bool   `toml:"recode"` // Add recode field
-}
-
 // Config represents the configuration file structure
 type Config struct {
-	Port     int                   `toml:"port"`
-	VideoDir string                `toml:"videoDir"`
-	Width    int                   `toml:"width"`
-	Height   int                   `toml:"height"`
-	Fps      int                   `toml:"fps"`
-	OwlCMS   string                `toml:"owlcms"`
-	Platform string                `toml:"platform"`
-	Cameras  []CameraConfiguration `toml:"-"`
+	Port     int    `toml:"port"`
+	VideoDir string `toml:"videoDir"`
+	Width    int    `toml:"width"`
+	Height   int    `toml:"height"`
+	Fps      int    `toml:"fps"`
+	OwlCMS   string `toml:"owlcms"`
+	Platform string `toml:"platform"`
 }
 
 var (
@@ -45,7 +32,6 @@ var (
 	Height        int
 	Fps           int
 	Recode        bool
-	CameraConfigs []CameraConfiguration
 	currentConfig *Config
 )
 
@@ -83,80 +69,12 @@ func LoadConfig(configFile string) (*Config, error) {
 	// Log the video directory
 	logging.InfoLogger.Printf("Videos will be stored in: %s", config.VideoDir)
 
-	// Load all raw config data for camera configs
-	var raw map[string]interface{}
-	if _, err := toml.DecodeFile(configFile, &raw); err != nil {
-		return nil, err
-	}
-
-	platformKey := getPlatformName()
-	var cameras []CameraConfiguration
-
-	// Helper: decode a raw map into a PlatformConfig
-	decodePlatformConfig := func(data interface{}) (CameraConfiguration, error) {
-		m, ok := data.(map[string]interface{})
-		if !ok {
-			return CameraConfiguration{}, fmt.Errorf("invalid type for platform config")
-		}
-		var pc CameraConfiguration
-		if val, ok := m["ffmpegPath"].(string); ok {
-			pc.FfmpegPath = val
-		}
-		if val, ok := m["ffmpegCamera"].(string); ok {
-			pc.FfmpegCamera = val
-		}
-		if val, ok := m["format"].(string); ok {
-			pc.Format = val
-		}
-		if val, ok := m["params"].(string); ok {
-			pc.Params = val
-		}
-		if val, ok := m["size"].(string); ok {
-			pc.Size = val
-		}
-		if val, ok := m["fps"].(int64); ok {
-			pc.Fps = int(val)
-		}
-		if val, ok := m["recode"].(bool); ok {
-			pc.Recode = val
-		} else {
-			pc.Recode = false // Default to false
-		}
-		return pc, nil
-	}
-
-	// Look for keys: "platformKey", "platformKey2", "platformKey3", ...
-	for i := 1; ; i++ {
-		key := platformKey
-		if i > 1 {
-			key = platformKey + strconv.Itoa(i)
-		}
-		confRaw, exists := raw[key]
-		if !exists {
-			// Check for aliases
-			if platformKey == "windows" && i == 1 {
-				confRaw, exists = raw["windows1"]
-			} else if platformKey == "linux" && i == 1 {
-				confRaw, exists = raw["linux1"]
-			}
-			if !exists {
-				break
-			}
-		}
-		pc, err := decodePlatformConfig(confRaw)
-		if err != nil {
-			return nil, err
-		}
-		cameras = append(cameras, pc)
-	}
-	config.Cameras = cameras
-
 	// Set remaining recording package configurations
 	SetVideoDir(config.VideoDir)
 	SetVideoConfig(config.Width, config.Height, config.Fps)
 
 	// Log all configuration parameters including all cameras
-	platformKey = getPlatformName()
+	platformKey := getPlatformName()
 	logging.InfoLogger.Printf("Configuration loaded from %s for platform %s:\n"+
 		"    Port: %d\n"+
 		"    VideoDir: %s\n",
@@ -164,30 +82,6 @@ func LoadConfig(configFile string) (*Config, error) {
 		platformKey,
 		config.Port,
 		config.VideoDir)
-
-	// Log each camera configuration
-	for i, camera := range cameras {
-		suffix := ""
-		if i > 0 {
-			suffix = strconv.Itoa(i + 1)
-		}
-		logging.InfoLogger.Printf("Camera configuration for %s%s:\n"+
-			"    FFmpeg Path: %s\n"+
-			"    FFmpeg Camera: %s\n"+
-			"    Format: %s\n"+
-			"    Params: %s\n"+
-			"    Size: %s\n"+
-			"    FPS: %d\n"+
-			"    Recode: %t",
-			platformKey, suffix,
-			camera.FfmpegPath,
-			camera.FfmpegCamera,
-			camera.Format,
-			camera.Params,
-			camera.Size,
-			camera.Fps,
-			camera.Recode)
-	}
 
 	// Store the current config for later use
 	currentConfig = &config
@@ -198,14 +92,6 @@ func LoadConfig(configFile string) (*Config, error) {
 // GetCurrentConfig returns the current configuration
 func GetCurrentConfig() *Config {
 	return currentConfig
-}
-
-// ValidateCamera checks if camera configuration is correct for the platform
-func (c *Config) ValidateCamera() error {
-	if len(c.Cameras) == 0 || c.Cameras[0].FfmpegCamera == "" {
-		return fmt.Errorf("camera not configured")
-	}
-	return nil
 }
 
 // InitConfig processes command-line flags and loads the configuration
@@ -238,20 +124,7 @@ An absolute path can be provded if needed.`, GetInstallDir()))
 		return nil, fmt.Errorf("error loading configuration: %w", err)
 	}
 
-	// Set camera configurations in the config package
-	SetCameraConfigs(cfg.Cameras)
-
 	return cfg, nil
-}
-
-// SetCameraConfigs sets the available camera configurations.
-func SetCameraConfigs(configs []CameraConfiguration) {
-	CameraConfigs = configs
-}
-
-// GetCameraConfigs returns the current camera configurations
-func GetCameraConfigs() []CameraConfiguration {
-	return CameraConfigs
 }
 
 // getInstallDir returns the installation directory based on the environment

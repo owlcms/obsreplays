@@ -194,11 +194,7 @@ func main() {
 
 	// Initialize with an empty status
 	var initialStatus string
-	if err := cfg.ValidateCamera(); err != nil {
-		initialStatus = "Error: " + err.Error()
-	} else {
-		initialStatus = "Scanning for owlcms server..."
-	}
+	initialStatus = "Scanning for owlcms server..."
 
 	// Start HTTP server
 	go func() {
