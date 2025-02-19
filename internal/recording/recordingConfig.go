@@ -11,10 +11,6 @@ var (
 	FfmpegFormat string
 	FfmpegParams string
 	NoVideo      bool
-	VideoDir     string
-	Width        int
-	Height       int
-	Fps          int
 	videoDir     string
 )
 
@@ -31,13 +27,6 @@ func SetVideoDir(dir string) {
 // GetVideoDir returns the absolute directory where videos are stored
 func GetVideoDir() string {
 	return videoDir
-}
-
-// SetVideoConfig sets the video configuration parameters
-func SetVideoConfig(w, h, f int) {
-	Width = w
-	Height = h
-	Fps = f
 }
 
 // SetFfmpegConfig sets the ffmpeg configuration parameters

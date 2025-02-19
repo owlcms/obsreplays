@@ -72,6 +72,9 @@ func Init(logDirectory string) error {
 	WarningLogger = log.New(warnWriter, "WARN: ", flags)
 	ErrorLogger = log.New(errorWriter, "ERROR: ", flags)
 
+	fmt.Printf("Loggers initialized successfully\n")
+	InfoLogger.Printf("Loggers initialized successfully")
+
 	return nil
 }
 

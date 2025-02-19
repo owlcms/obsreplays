@@ -187,10 +187,9 @@ func main() {
 		logging.ErrorLogger.Fatalf("Error processing flags: %v", err)
 	}
 
-	// Set recording package configuration
+	// Set recording package configuration (but don't initialize recorder yet)
 	recording.SetNoVideo(config.NoVideo)
 	recording.SetVideoDir(cfg.VideoDir)
-	recording.SetVideoConfig(cfg.Width, cfg.Height, cfg.Fps)
 
 	// Initialize with an empty status
 	var initialStatus string
@@ -306,6 +305,16 @@ func main() {
 			statusLabel.Refresh()
 		} else {
 			cfg.OwlCMS = broker
+
+			// Initialize recorder after owlcms is found
+			if err := recording.InitializeRecorder(); err != nil {
+				logging.ErrorLogger.Printf("Failed to initialize recorder: %v", err)
+				statusLabel.SetText(fmt.Sprintf("Error: Could not connect to OBS - %v", err))
+				statusLabel.TextStyle = fyne.TextStyle{Bold: true}
+				statusLabel.Refresh()
+				return
+			}
+
 			statusLabel.SetText("Ready")
 			statusLabel.TextStyle = fyne.TextStyle{Bold: false}
 			statusLabel.Refresh()

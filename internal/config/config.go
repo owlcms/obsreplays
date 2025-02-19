@@ -16,9 +16,6 @@ import (
 type Config struct {
 	Port     int    `toml:"port"`
 	VideoDir string `toml:"videoDir"`
-	Width    int    `toml:"width"`
-	Height   int    `toml:"height"`
-	Fps      int    `toml:"fps"`
 	OwlCMS   string `toml:"owlcms"`
 	Platform string `toml:"platform"`
 }
@@ -28,9 +25,6 @@ var (
 	NoVideo       bool
 	InstallDir    string
 	videoDir      string
-	Width         int
-	Height        int
-	Fps           int
 	Recode        bool
 	currentConfig *Config
 )
@@ -71,9 +65,8 @@ func LoadConfig(configFile string) (*Config, error) {
 
 	// Set remaining recording package configurations
 	SetVideoDir(config.VideoDir)
-	SetVideoConfig(config.Width, config.Height, config.Fps)
 
-	// Log all configuration parameters including all cameras
+	// Log all configuration parameters
 	platformKey := getPlatformName()
 	logging.InfoLogger.Printf("Configuration loaded from %s for platform %s:\n"+
 		"    Port: %d\n"+
@@ -258,13 +251,6 @@ func UpdatePlatform(configFile, platform string) error {
 // SetVideoDir sets the video directory
 func SetVideoDir(dir string) {
 	videoDir = dir
-}
-
-// SetVideoConfig sets the video configuration
-func SetVideoConfig(width, height, fps int) {
-	Width = width
-	Height = height
-	Fps = fps
 }
 
 // SetNoVideo sets the no video flag

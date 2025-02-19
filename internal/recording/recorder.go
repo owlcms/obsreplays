@@ -19,11 +19,13 @@ var (
 	obsClient        *OBSWebSocketClient
 )
 
-func init() {
+// InitializeRecorder sets up the OBS client connection
+func InitializeRecorder() error {
 	obsClient = NewOBSWebSocketClient()
 	if err := obsClient.Connect(); err != nil {
-		logging.ErrorLogger.Fatalf("Failed to connect to OBS WebSocket: %v", err)
+		return fmt.Errorf("failed to connect to OBS WebSocket: %v", err)
 	}
+	return nil
 }
 
 // buildTrimmingArgs builds the ffmpeg arguments for trimming
@@ -56,6 +58,10 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	currentFileNames = fileNames
 	state.LastTimerStopTime = 0
 
+	// reset the Replay Source plugin
+	if err := obsClient.TriggerHotkey("OBS_KEY_F6"); err != nil {
+		return fmt.Errorf("failed to send F6 hotkey to OBS: %w", err)
+	}
 	if err := obsClient.TriggerHotkey("OBS_KEY_F7"); err != nil {
 		return fmt.Errorf("failed to send F7 hotkey to OBS: %w", err)
 	}
@@ -77,6 +83,10 @@ func StopRecording(decisionTime int64) error {
 
 	if err := obsClient.TriggerHotkey("OBS_KEY_F8"); err != nil {
 		return fmt.Errorf("failed to send F8 hotkey to OBS: %w", err)
+	}
+	// free up the files.
+	if err := obsClient.TriggerHotkey("OBS_KEY_F6"); err != nil {
+		return fmt.Errorf("failed to send F6 hotkey to OBS: %w", err)
 	}
 
 	startTime := state.LastStartTime
